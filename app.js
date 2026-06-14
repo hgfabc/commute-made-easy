@@ -454,7 +454,7 @@ function Metric({ label, value, tone = "slate" }) {
 function EtaPill({ entry, lang }) {
   const urgent = hasEta(entry) && Math.round(entry.EstimateTime / 60) <= 2;
   return (
-    <span className={"inline-flex min-w-[76px] justify-center rounded-md px-2 py-1 text-xs font-semibold " + (urgent ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
+    <span className={"inline-flex min-w-[62px] justify-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold sm:min-w-[76px] sm:px-2 sm:py-1 sm:text-xs " + (urgent ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
       {entry ? etaLabel(entry, lang) : "—"}
     </span>
   );
@@ -830,13 +830,13 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1 overflow-hidden">
           {!route && !loading && (
             <div className="flex h-full items-center justify-center p-6 text-center text-sm text-slate-500">{t.noRouteLoaded}</div>
           )}
           {stops.length > 0 && (
-            <div className="cme-scroll h-full overflow-y-auto">
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 px-4 py-3">
+            <div className="cme-route-stop-scroll cme-scroll h-full overflow-y-auto">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 px-3 py-2 sm:px-4 sm:py-3">
                 <div className="text-xs font-semibold uppercase text-slate-500">{t.departures}</div>
                 <div className="max-w-[70%] truncate text-xs text-slate-400">{directionName}</div>
               </div>
@@ -846,14 +846,14 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
                   const confirmed = e && plateText(e.PlateNumb);
                   const estimated = confirmed ? "" : estimatePlate(s.order);
                   return (
-                    <div key={i} className="grid grid-cols-[34px_minmax(0,1fr)_auto] gap-3 px-4 py-3 hover:bg-teal-50/45">
+                    <div key={i} className="grid grid-cols-[28px_minmax(0,1fr)_auto] gap-2 px-3 py-2 hover:bg-teal-50/45 sm:grid-cols-[34px_minmax(0,1fr)_auto] sm:gap-3 sm:px-4 sm:py-3">
                       <div className="flex flex-col items-center">
-                        <span className="grid h-7 w-7 place-items-center rounded-full border border-teal-200 bg-white text-[11px] font-semibold text-teal-800">{s.order}</span>
-                        {i < stops.length - 1 && <span className="cme-route-rail mt-1 h-full min-h-6 w-0.5 rounded-full"></span>}
+                        <span className="grid h-6 w-6 place-items-center rounded-full border border-teal-200 bg-white text-[10px] font-semibold text-teal-800 sm:h-7 sm:w-7 sm:text-[11px]">{s.order}</span>
+                        {i < stops.length - 1 && <span className="cme-route-rail mt-1 h-full min-h-4 w-0.5 rounded-full sm:min-h-6"></span>}
                       </div>
                       <button className="min-w-0 text-left" onClick={() => onShowStops && onShowStops(s.zh)} title={s.zh}>
-                        <div className="truncate text-sm font-semibold text-slate-800 hover:text-teal-700">{pickName(s.zh, s.en, lang)}</div>
-                        <div className="mt-1 min-h-[14px] text-[11px] font-mono text-slate-400">
+                        <div className="truncate text-xs font-semibold text-slate-800 hover:text-teal-700 sm:text-sm">{pickName(s.zh, s.en, lang)}</div>
+                        <div className="mt-0.5 min-h-[12px] text-[10px] font-mono text-slate-400 sm:mt-1 sm:min-h-[14px] sm:text-[11px]">
                           {confirmed ? e.PlateNumb : (estimated ? "~" + estimated : "")}
                         </div>
                       </button>
