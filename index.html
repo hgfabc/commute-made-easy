@@ -108,6 +108,9 @@ const STR = {
     map: "Map", now: "Now", routeLine: "Road geometry", history: "Search history",
     rateLimited: "TDX is rate-limiting live stop arrivals. Please try this stop again in a few seconds.",
     autoRefresh: "Auto-refresh: 15s",
+    allowLocation: "Allow location", updateLocation: "Update location", locating: "Finding you…",
+    nearestStop: "Nearest stop", locationUnavailable: "Location is not available in this browser.",
+    locationDenied: "Location permission was blocked. Allow location in browser settings and try again.",
     directionsDenied: "Google Directions denied this request. Enable Directions API, confirm billing is active, and make sure this API key allows the current test URL such as localhost, your Mac's LAN IP, or your beta URL.",
     directionsNoRoute: "Google could not find a transit route for those places. Try full names like Taipei 101 and Taipei Main Station.",
     start: "Start", reset: "Reset", score: "Score", best: "Best", streak: "Streak",
@@ -135,6 +138,9 @@ const STR = {
     map: "地圖", now: "現在", routeLine: "道路線形", history: "搜尋紀錄",
     rateLimited: "TDX 目前限制即時站牌查詢，請幾秒後再試一次。",
     autoRefresh: "每 15 秒自動更新",
+    allowLocation: "允許定位", updateLocation: "更新定位", locating: "定位中…",
+    nearestStop: "最近站牌", locationUnavailable: "此瀏覽器無法使用定位。",
+    locationDenied: "定位權限被阻擋。請在瀏覽器設定允許定位後再試一次。",
     directionsDenied: "Google Directions 拒絕此請求。請啟用 Directions API、確認帳單已啟用，並確認 API key 允許目前測試網址，例如 localhost、Mac 的區網 IP 或 beta 網址。",
     directionsNoRoute: "Google 找不到這兩地的大眾運輸路線。請試試完整名稱，例如 Taipei 101 和 Taipei Main Station。",
     start: "開始", reset: "重置", score: "分數", best: "最高", streak: "連擊",
@@ -417,6 +423,16 @@ function distanceToStopsMeters(p, stops) {
   if (!p || !stops || !stops.length) return Infinity;
   return stops.reduce((best, s) => (s.lat && s.lng ? Math.min(best, haversine(p, s)) : best), Infinity);
 }
+function nearestStopIndex(p, stops) {
+  if (!p || !stops || !stops.length) return -1;
+  let bestIdx = -1, best = Infinity;
+  stops.forEach((s, i) => {
+    if (!s.lat || !s.lng) return;
+    const d = haversine(p, s);
+    if (d < best) { best = d; bestIdx = i; }
+  });
+  return bestIdx;
+}
 function scorePathsAgainstStops(paths, stops) {
   const valid = (stops || []).filter(s => s.lat && s.lng);
   if (!paths || !paths.length || !valid.length) return 0;
@@ -572,7 +588,7 @@ function busMarkerSvg(heading) {
 }
 
 /* ========================= Map panel ========================= */
-function MapPanel({ stops, vehicles, directionsResult, routePaths, onStopClick, stopActionLabel }) {
+function MapPanel({ stops, vehicles, directionsResult, routePaths, onStopClick, stopActionLabel, userLocation }) {
   const ref = useRef(null);
   const mapRef = useRef(null);
   const overlays = useRef([]);
@@ -659,6 +675,39 @@ function MapPanel({ stops, vehicles, directionsResult, routePaths, onStopClick, 
       });
     }
 
+    if (userLocation?.lat && userLocation?.lng) {
+      const pos = { lat: userLocation.lat, lng: userLocation.lng };
+      const accuracy = Math.max(18, Math.min(userLocation.accuracy || 40, 250));
+      const circle = new g.maps.Circle({
+        center: pos,
+        radius: accuracy,
+        map: mapRef.current,
+        fillColor: "#0ea5e9",
+        fillOpacity: 0.12,
+        strokeColor: "#0284c7",
+        strokeOpacity: 0.35,
+        strokeWeight: 1,
+        zIndex: 4
+      });
+      const marker = new g.maps.Marker({
+        position: pos,
+        map: mapRef.current,
+        icon: {
+          path: g.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: "#0284c7",
+          fillOpacity: 1,
+          strokeColor: "#ffffff",
+          strokeWeight: 3
+        },
+        title: "Current location",
+        zIndex: 1001
+      });
+      overlays.current.push(circle, marker);
+      bounds.extend(pos);
+      hasBounds = true;
+    }
+
     if (hasBounds) mapRef.current.fitBounds(bounds);
 
     (vehicles || []).filter(v => v.lat && v.lng).forEach(v => {
@@ -678,7 +727,7 @@ function MapPanel({ stops, vehicles, directionsResult, routePaths, onStopClick, 
       });
       overlays.current.push(m);
     });
-  }, [stops, vehicles, routePaths, mapReady]);
+  }, [stops, vehicles, routePaths, userLocation, mapReady]);
 
   useEffect(() => {
     const g = window.google;
@@ -711,6 +760,11 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [routeHistory, setRouteHistory] = useState(() => SearchHistory.read().routes);
+  const [userLocation, setUserLocation] = useState(null);
+  const [locating, setLocating] = useState(false);
+  const [locationErr, setLocationErr] = useState(null);
+  const [nearestIdx, setNearestIdx] = useState(-1);
+  const stopRefs = useRef(new Map());
 
   const applyEta = (items) => {
     const map = {};
@@ -800,6 +854,30 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
     return () => clearInterval(id);
   }, [route, dirs.length, refreshLive]);
 
+  const requestLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setLocationErr(STR[lang].locationUnavailable);
+      return;
+    }
+    setLocating(true);
+    setLocationErr(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy
+        });
+        setLocating(false);
+      },
+      () => {
+        setLocationErr(STR[lang].locationDenied);
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  }, [lang]);
+
   const current = dirs[activeDir];
   const stops = current ? current.stops : [];
   // Pick ONE geometry for the active branch: prefer the shape that hugs the
@@ -842,6 +920,18 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
   const etaEntries = current ? stops.map(s => etaMap[current.direction + "|" + s.zh]).filter(hasEta) : [];
   const nextEta = etaEntries.length ? etaEntries.reduce((a, b) => (a.EstimateTime < b.EstimateTime ? a : b), etaEntries[0]) : null;
   const directionName = current ? dirLabel(current) : "—";
+  const nearestStop = nearestIdx >= 0 ? stops[nearestIdx] : null;
+
+  useEffect(() => {
+    if (!userLocation || !stops.length) { setNearestIdx(-1); return; }
+    const idx = nearestStopIndex(userLocation, stops);
+    setNearestIdx(idx);
+    if (idx >= 0) {
+      requestAnimationFrame(() => {
+        stopRefs.current.get(idx)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    }
+  }, [userLocation, activeDir, current?.direction, stops.length]);
 
   return (
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(360px,0.92fr)_minmax(420px,1.28fr)]">
@@ -851,6 +941,18 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
             <TextInput value={query} onChange={e => setQuery(e.target.value)} placeholder={t.routePh} />
             <PrimaryButton>{t.search}</PrimaryButton>
           </form>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={requestLocation}
+              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-sky-700 hover:border-sky-300 hover:bg-sky-50">
+              {locating ? t.locating : (userLocation ? t.updateLocation : t.allowLocation)}
+            </button>
+            {nearestStop && (
+              <span className="min-w-0 truncate rounded-md border border-sky-100 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">
+                {t.nearestStop}: {pickName(nearestStop.zh, nearestStop.en, lang)}
+              </span>
+            )}
+            {locationErr && <span className="text-xs font-medium text-rose-600">{locationErr}</span>}
+          </div>
           <HistoryChips label={t.history} items={routeHistory} onPick={(item) => { setQuery(item); load(item); }} />
 
           {route && !loading && dirs.length > 0 && (
@@ -915,14 +1017,19 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
                   const e = current ? etaMap[current.direction + "|" + s.zh] : null;
                   const confirmed = e && plateText(e.PlateNumb);
                   const estimated = confirmed ? "" : estimatePlate(s.order);
+                  const isNearest = i === nearestIdx;
                   return (
-                    <div key={i} className="grid grid-cols-[28px_minmax(0,1fr)_auto] gap-2 px-3 py-2 hover:bg-teal-50/45 sm:grid-cols-[34px_minmax(0,1fr)_auto] sm:gap-3 sm:px-4 sm:py-3">
+                    <div key={i} ref={(el) => { if (el) stopRefs.current.set(i, el); else stopRefs.current.delete(i); }}
+                      className={"grid grid-cols-[28px_minmax(0,1fr)_auto] gap-2 px-3 py-2 sm:grid-cols-[34px_minmax(0,1fr)_auto] sm:gap-3 sm:px-4 sm:py-3 " + (isNearest ? "bg-sky-50 ring-1 ring-inset ring-sky-200" : "hover:bg-teal-50/45")}>
                       <div className="flex flex-col items-center">
-                        <span className="grid h-6 w-6 place-items-center rounded-full border border-teal-200 bg-white text-[10px] font-semibold text-teal-800 sm:h-7 sm:w-7 sm:text-[11px]">{s.order}</span>
+                        <span className={"grid h-6 w-6 place-items-center rounded-full border bg-white text-[10px] font-semibold sm:h-7 sm:w-7 sm:text-[11px] " + (isNearest ? "border-sky-300 text-sky-800" : "border-teal-200 text-teal-800")}>{s.order}</span>
                         {i < stops.length - 1 && <span className="cme-route-rail mt-1 h-full min-h-4 w-0.5 rounded-full sm:min-h-6"></span>}
                       </div>
                       <button className="min-w-0 text-left" onClick={() => onShowStops && onShowStops(s.zh)} title={s.zh}>
-                        <div className="truncate text-xs font-semibold text-slate-800 hover:text-teal-700 sm:text-sm">{pickName(s.zh, s.en, lang)}</div>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-xs font-semibold text-slate-800 hover:text-teal-700 sm:text-sm">{pickName(s.zh, s.en, lang)}</span>
+                          {isNearest && <span className="shrink-0 rounded bg-sky-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-sky-700">{t.nearestStop}</span>}
+                        </div>
                         <div className="mt-0.5 min-h-[12px] text-[10px] font-mono text-slate-400 sm:mt-1 sm:min-h-[14px] sm:text-[11px]">
                           {confirmed ? e.PlateNumb : (estimated ? "~" + estimated : "")}
                         </div>
@@ -949,7 +1056,7 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
         </div>
         <div className="min-h-[340px] flex-1">
           <MapPanel stops={stops.map(s => ({ ...s, name: pickName(s.zh, s.en, lang) }))} vehicles={visibleVehicles} routePaths={routePaths}
-            onStopClick={(s) => onShowStops && onShowStops(s.zh)} stopActionLabel={t.viewRoutes} />
+            onStopClick={(s) => onShowStops && onShowStops(s.zh)} stopActionLabel={t.viewRoutes} userLocation={userLocation} />
         </div>
       </Panel>
     </div>
