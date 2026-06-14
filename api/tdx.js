@@ -3,6 +3,10 @@ const BASE_URL = "https://tdx.transportdata.tw/api/basic/v2/Bus";
 
 let tokenCache = null;
 const responseCache = new Map();
+const rateBuckets = new Map();
+
+const RATE_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT = Number(process.env.RATE_LIMIT_PER_MINUTE || 180);
 
 const ALLOWED_PREFIXES = [
   "/Stop/City/",
@@ -14,10 +18,52 @@ const ALLOWED_PREFIXES = [
   "/Route/City/"
 ];
 
-function setCors(res) {
-  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
+function allowedOrigins() {
+  return (process.env.ALLOWED_ORIGINS || process.env.ALLOWED_ORIGIN || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function setCors(req, res) {
+  const origin = req.headers.origin;
+  const allowed = allowedOrigins();
+  if (origin && (allowed.includes("*") || allowed.includes(origin))) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function rejectBadOrigin(req) {
+  const origin = req.headers.origin;
+  const allowed = allowedOrigins();
+  return !!origin && !!allowed.length && !allowed.includes("*") && !allowed.includes(origin);
+}
+
+function clientIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) return forwarded.split(",")[0].trim();
+  return req.socket?.remoteAddress || "unknown";
+}
+
+function checkRateLimit(req) {
+  const now = Date.now();
+  const ip = clientIp(req);
+  const bucket = rateBuckets.get(ip);
+  if (!bucket || bucket.resetAt <= now) {
+    rateBuckets.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return { ok: true };
+  }
+  bucket.count += 1;
+  if (bucket.count > RATE_LIMIT) {
+    return { ok: false, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+  }
+  if (rateBuckets.size > 1000) {
+    for (const [key, value] of rateBuckets) if (value.resetAt <= now) rateBuckets.delete(key);
+  }
+  return { ok: true };
 }
 
 function cacheTtl(path) {
@@ -62,9 +108,16 @@ async function getToken() {
 }
 
 module.exports = async function handler(req, res) {
-  setCors(res);
+  setCors(req, res);
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+  if (rejectBadOrigin(req)) return res.status(403).json({ error: "Origin not allowed" });
+
+  const rate = checkRateLimit(req);
+  if (!rate.ok) {
+    res.setHeader("Retry-After", String(rate.retryAfter));
+    return res.status(429).json({ error: "Too many requests" });
+  }
 
   try {
     const path = String(req.query.path || "");
