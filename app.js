@@ -18,7 +18,7 @@ const CFG = Object.assign({
  * ------------------------------------------------------------------------- */
 const STR = {
   en: {
-    route: "Bus number", stop: "Stop", trip: "Plan trip", game: "Wait game", favs: "Favorites",
+    route: "Bus number", stop: "Stop", trip: "Plan trip", favs: "Favorites",
     search: "Search", refresh: "↻ Refresh live", findRoutes: "Find routes",
     routePh: "Bus number, e.g. 307 or 信義幹線",
     stopPh: "Stop name, e.g. Taipei Main Station / 台北車站",
@@ -31,7 +31,7 @@ const STR = {
     routeWord: "Route", walk: "Walk", take: "Take",
     showAll: "Show opposite-direction buses", viewRoutes: "Routes at this stop",
     appName: "Commute Made Easy", cityMode: "Taipei network", liveBoard: "Live board",
-    routePanel: "Route radar", stopPanel: "Stop board", tripPanel: "Trip planner", gamePanel: "Wait game", favPanel: "Saved",
+    routePanel: "Route radar", stopPanel: "Stop board", tripPanel: "Trip planner", favPanel: "Saved",
     activeRoute: "Active route", noRouteLoaded: "Search a route to start.",
     stopsMetric: "Stops", vehiclesMetric: "Vehicles", directionMetric: "Direction",
     departures: "Departures", matches: "Matches", savedRoutes: "Saved routes", savedStops: "Saved stops",
@@ -43,12 +43,10 @@ const STR = {
     locationDenied: "Location permission was blocked. Allow location in browser settings and try again.",
     directionsDenied: "Google Directions denied this request. Enable Directions API, confirm billing is active, and make sure this API key allows the current test URL such as localhost, your Mac's LAN IP, or your beta URL.",
     directionsNoRoute: "Google could not find a transit route for those places. Try full names like Taipei 101 and Taipei Main Station.",
-    start: "Start", reset: "Reset", score: "Score", best: "Best", streak: "Streak",
-    gameReady: "Ready", gameWait: "Wait for it", gameDrop: "Catch it", gameCaught: "Caught", gameMissed: "Missed",
     statuses: { arriving: "Arriving", min: "min", 1: "Not departed", 2: "Not stopping", 3: "Last bus passed", 4: "No service today" }
   },
   zh: {
-    route: "公車號", stop: "站牌", trip: "路線規劃", game: "等車小遊戲", favs: "我的最愛",
+    route: "公車號", stop: "站牌", trip: "路線規劃", favs: "我的最愛",
     search: "搜尋", refresh: "↻ 更新即時", findRoutes: "查詢路線",
     routePh: "公車號，例如 307 或 信義幹線",
     stopPh: "站牌名稱，例如 台北車站",
@@ -61,7 +59,7 @@ const STR = {
     routeWord: "路線", walk: "步行", take: "搭乘",
     showAll: "顯示反向車輛", viewRoutes: "此站所有路線",
     appName: "Commute Made Easy", cityMode: "台北路網", liveBoard: "即時看板",
-    routePanel: "路線雷達", stopPanel: "站牌看板", tripPanel: "旅程規劃", gamePanel: "等車小遊戲", favPanel: "收藏",
+    routePanel: "路線雷達", stopPanel: "站牌看板", tripPanel: "旅程規劃", favPanel: "收藏",
     activeRoute: "目前路線", noRouteLoaded: "搜尋路線開始。",
     stopsMetric: "站數", vehiclesMetric: "車輛", directionMetric: "方向",
     departures: "到站資訊", matches: "符合站牌", savedRoutes: "收藏路線", savedStops: "收藏站牌",
@@ -73,8 +71,6 @@ const STR = {
     locationDenied: "定位權限被阻擋。請在瀏覽器設定允許定位後再試一次。",
     directionsDenied: "Google Directions 拒絕此請求。請啟用 Directions API、確認帳單已啟用，並確認 API key 允許目前測試網址，例如 localhost、Mac 的區網 IP 或 beta 網址。",
     directionsNoRoute: "Google 找不到這兩地的大眾運輸路線。請試試完整名稱，例如 Taipei 101 和 Taipei Main Station。",
-    start: "開始", reset: "重置", score: "分數", best: "最高", streak: "連擊",
-    gameReady: "準備", gameWait: "等一下", gameDrop: "接住", gameCaught: "接到了", gameMissed: "落地了",
     statuses: { arriving: "進站中", min: "分鐘", 1: "尚未發車", 2: "不停靠", 3: "末班車已過", 4: "今日未營運" }
   }
 };
@@ -1239,143 +1235,6 @@ function TripPlanner({ lang }) {
   );
 }
 
-/* ========================= Ambient wait game ========================= */
-function AmbientWaitGame({ lang }) {
-  const t = STR[lang];
-  const rafRef = useRef(null);
-  const timeoutRef = useRef(null);
-  const bestKey = "cme_wait_game_best_v1";
-  const initialBest = () => {
-    try { return Number(localStorage.getItem(bestKey)) || 0; } catch { return 0; }
-  };
-  const stateRef = useRef({
-    phase: "waiting", score: 0, streak: 0, best: initialBest(),
-    stickX: 50, stickY: -14, trayX: 50, velocity: 0.01, angle: 0, last: 0, flash: ""
-  });
-  const [view, setView] = useState(() => ({ ...stateRef.current }));
-
-  const publish = () => setView({ ...stateRef.current });
-
-  const setTrayFromClient = (clientX) => {
-    const width = window.innerWidth || 1;
-    stateRef.current.trayX = Math.max(8, Math.min(92, (clientX / width) * 100));
-    publish();
-  };
-
-  const queueRound = (delay = 2400 + Math.random() * 5200) => {
-    clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => startRound(), delay);
-  };
-
-  const finishRound = (caught) => {
-    const s = stateRef.current;
-    s.phase = caught ? "caught" : "missed";
-    s.flash = caught ? t.gameCaught : t.gameMissed;
-    if (caught) {
-      s.score += 1;
-      s.streak += 1;
-      s.best = Math.max(s.best, s.score);
-      try { localStorage.setItem(bestKey, String(s.best)); } catch {}
-    } else {
-      s.streak = 0;
-    }
-    publish();
-    queueRound(caught ? 1800 + Math.random() * 2600 : 2400 + Math.random() * 3600);
-  };
-
-  const loop = (now) => {
-    const s = stateRef.current;
-    const dt = Math.min(40, now - (s.last || now));
-    s.last = now;
-    if (s.phase === "falling") {
-      s.velocity += 0.0000012 * dt;
-      s.stickY += s.velocity * dt;
-      s.angle += Math.sin(now / 260) * 0.07;
-      if (s.stickY >= 88) {
-        finishRound(Math.abs(s.stickX - s.trayX) <= 10);
-        return;
-      }
-      publish();
-      rafRef.current = requestAnimationFrame(loop);
-    }
-  };
-
-  const startRound = () => {
-    cancelAnimationFrame(rafRef.current);
-    const s = stateRef.current;
-    s.phase = "falling";
-    s.flash = "";
-    s.stickX = 12 + Math.random() * 76;
-    s.stickY = -14;
-    s.velocity = 0.0085 + Math.random() * 0.003 + Math.min(s.score, 12) * 0.00018;
-    s.angle = -10 + Math.random() * 20;
-    s.last = performance.now();
-    publish();
-    rafRef.current = requestAnimationFrame(loop);
-  };
-
-  const reset = () => {
-    cancelAnimationFrame(rafRef.current);
-    clearTimeout(timeoutRef.current);
-    stateRef.current = { ...stateRef.current, phase: "waiting", score: 0, streak: 0, stickY: -14, velocity: 0.01, flash: "" };
-    publish();
-    queueRound(900);
-  };
-
-  useEffect(() => {
-    const move = (e) => setTrayFromClient(e.clientX);
-    const touchMove = (e) => {
-      const touch = e.touches && e.touches[0];
-      if (touch) setTrayFromClient(touch.clientX);
-    };
-    window.addEventListener("pointermove", move, { passive: true });
-    window.addEventListener("touchmove", touchMove, { passive: true });
-    queueRound(700 + Math.random() * 1300);
-    return () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("touchmove", touchMove);
-      cancelAnimationFrame(rafRef.current);
-      clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
-  const flashTone = view.phase === "caught"
-    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-    : "border-rose-200 bg-rose-50 text-rose-700";
-
-  return (
-    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden">
-      <div
-        className="absolute h-24 w-3 origin-center rounded-full bg-gradient-to-b from-amber-700 via-amber-500 to-amber-800 shadow-lg"
-        style={{ left: view.stickX + "vw", top: view.stickY + "vh", transform: `translate(-50%, -50%) rotate(${view.angle}deg)`, opacity: view.phase === "waiting" ? 0 : 1 }}>
-      </div>
-
-      {view.flash && (
-        <div
-          className={"absolute rounded-md border px-2 py-1 text-xs font-semibold shadow-sm " + flashTone}
-          style={{ left: view.stickX + "vw", top: "calc(" + Math.min(82, Math.max(8, view.stickY)) + "vh - 32px)", transform: "translateX(-50%)" }}>
-          {view.flash}
-        </div>
-      )}
-
-      <div
-        className="pointer-events-auto absolute bottom-4 w-36 touch-none select-none"
-        style={{ left: view.trayX + "vw", transform: "translateX(-50%)" }}
-        onPointerDown={(e) => setTrayFromClient(e.clientX)}
-        onPointerMove={(e) => setTrayFromClient(e.clientX)}>
-        <div className="mb-2 grid grid-cols-[1fr_auto] items-center gap-1 rounded-md border border-slate-200 bg-white/95 px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm">
-          <span className="truncate">{t.score}: {view.score} · {t.best}: {view.best}</span>
-          <button type="button" onClick={reset} title={t.reset}
-            className="grid h-6 w-6 place-items-center rounded-md border border-slate-200 bg-slate-50 text-xs text-slate-500 hover:border-teal-300 hover:text-teal-700">
-            ↻
-          </button>
-        </div>
-        <div className="h-4 rounded-full border border-teal-950 bg-teal-700 shadow-lg"></div>
-      </div>
-    </div>
-  );
-}
-
 /* ========================= Feature 4 — Favorites ========================= */
 function FavoritesView({ favs, setFavs, onShowRoute, onShowStop, lang }) {
   const t = STR[lang];
@@ -1502,7 +1361,6 @@ function App() {
           {tab === "favs" && <FavoritesView favs={favs} setFavs={setFavs} onShowRoute={openRoute} onShowStop={openStop} lang={lang} />}
         </div>
       </main>
-      <AmbientWaitGame lang={lang} />
     </div>
   );
 }

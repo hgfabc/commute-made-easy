@@ -8,7 +8,6 @@ live route/stop boards, and a large map workspace.
 - **Bus number** — search a route → see a dispatcher-style departure board, live ETAs per stop, the real road-following route line with direction arrows, and live bus positions. Live ETAs and bus positions refresh every 15 seconds. Direction tabs are labelled origin→destination. By default only the selected direction's buses show; a checkbox reveals opposite-direction buses. Click any stop dot on the map for its name + a "routes at this stop" button.
 - **Stop** — smart search that handles abbreviations (北車, 安森, 大森公), 台/臺 spelling, and English. Pick a stop → a live departures board for every route serving it; tap a route to jump to it. Selected stop arrivals refresh every 15 seconds. Edit `STOP_ALIASES` in index.html to add your own nicknames.
 - **Plan trip** — A→B public-transit directions with a matching map workspace (via Google Directions).
-- **Wait game** — a tiny one-thumb catching game for killing time while waiting for a bus.
 - **Favorites** — star routes and stops; the saved view becomes a launchpad back into live route/stop boards.
 - **Bilingual** — EN / 中 toggle (top-right) switches all chrome and stop/route names; remembered across sessions.
 
