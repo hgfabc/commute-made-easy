@@ -514,7 +514,7 @@ function busMarkerSvg(heading) {
 }
 
 /* ========================= Map panel ========================= */
-function MapPanel({ stops, vehicles, directionsResult, routePaths, onStopClick, stopActionLabel, userLocation }) {
+function MapPanel({ stops, vehicles, directionsResult, routePaths, showFallbackLine = true, onStopClick, stopActionLabel, userLocation }) {
   const ref = useRef(null);
   const mapRef = useRef(null);
   const overlays = useRef([]);
@@ -563,8 +563,9 @@ function MapPanel({ stops, vehicles, directionsResult, routePaths, onStopClick, 
 
     const pts = (stops || []).filter(s => s.lat && s.lng);
     if (pts.length) {
-      // Fallback only when no geometry is available: straight connectors (still arrowed).
-      if (!paths) {
+      // Fallback only when explicitly allowed. Route boards disable this to avoid
+      // drawing misleading stop-to-stop chords while the real shape is loading.
+      if (!paths && showFallbackLine) {
         const straight = pts.map(s => ({ lat: s.lat, lng: s.lng }));
         drawLine(straight, 4, 0.5);
       }
@@ -653,7 +654,7 @@ function MapPanel({ stops, vehicles, directionsResult, routePaths, onStopClick, 
       });
       overlays.current.push(m);
     });
-  }, [stops, vehicles, routePaths, userLocation, mapReady]);
+  }, [stops, vehicles, routePaths, showFallbackLine, userLocation, mapReady]);
 
   useEffect(() => {
     const g = window.google;
@@ -680,6 +681,7 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
   const [etaMap, setEtaMap] = useState({});
   const [vehicles, setVehicles] = useState([]);
   const [shapes, setShapes] = useState([]); // list of { direction, paths, pts }
+  const [shapeStatus, setShapeStatus] = useState("idle");
   const [nearStops, setNearStops] = useState([]); // live bus -> stop seq, for plate inference
   const [activeDir, setActiveDir] = useState(0);
   const [showAllBuses, setShowAllBuses] = useState(false);
@@ -691,6 +693,7 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
   const [locationErr, setLocationErr] = useState(null);
   const [nearestIdx, setNearestIdx] = useState(-1);
   const stopRefs = useRef(new Map());
+  const loadSeq = useRef(0);
 
   const applyEta = (items) => {
     const map = {};
@@ -712,12 +715,13 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
       .map(n => ({ direction: n.Direction, seq: n.StopSequence, plate: n.PlateNumb }))
       .filter(n => plateText(n.plate) && n.seq != null));
   };
-  const refreshLive = useCallback(async (name, quiet = false) => {
+  const refreshLive = useCallback(async (name, quiet = false, seq = null) => {
     if (!name) return;
     try {
       const [eta, rt, near] = await Promise.allSettled([
         TDX.etaOfRoute(name), TDX.realtimeOfRoute(name), TDX.nearStopOfRoute(name)
       ]);
+      if (seq != null && seq !== loadSeq.current) return;
       if (eta.status === "fulfilled") applyEta(eta.value);
       if (rt.status === "fulfilled") applyVehicles(rt.value);
       if (near.status === "fulfilled" && Array.isArray(near.value)) applyNearStops(near.value);
@@ -728,10 +732,14 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
 
   const load = useCallback(async (name) => {
     if (!name) return;
+    const seq = ++loadSeq.current;
     setRouteHistory(SearchHistory.add("routes", name).routes);
-    setLoading(true); setErr(null); setRoute(name); setShapes([]); setNearStops([]);
+    setLoading(true); setErr(null); setRoute(name);
+    setShapes([]); setShapeStatus("idle"); setNearStops([]);
+    setEtaMap({}); setVehicles([]); setNearestIdx(-1); setShowAllBuses(false);
     try {
       const sor = await TDX.stopsOfRoute(name);
+      if (seq !== loadSeq.current) return;
       if (!sor.length) { setErr(STR[lang].noRoute + " “" + name + "”."); setDirs([]); setLoading(false); return; }
       const grouped = sor.map(d => ({
         direction: d.Direction,
@@ -750,28 +758,32 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
         if (!ex || grp.stops.length > ex.stops.length) byKey.set(key, grp);
       });
       setDirs([...byKey.values()]); setActiveDir(0);
-      const [eta, rt, shp, near] = await Promise.allSettled([
-        TDX.etaOfRoute(name), TDX.realtimeOfRoute(name), TDX.shapeOfRoute(name), TDX.nearStopOfRoute(name)
-      ]);
-      if (eta.status === "fulfilled") applyEta(eta.value);
-      else setEtaMap({});
-      if (rt.status === "fulfilled") applyVehicles(rt.value);
-      else setVehicles([]);
-      if (shp.status === "fulfilled" && shp.value && shp.value.length) {
+      setLoading(false);
+      setShapeStatus("loading");
+
+      TDX.shapeOfRoute(name).then((value) => {
+        if (seq !== loadSeq.current) return;
         // Keep each sub-route's geometry as its own row; the active stop list
         // later decides which branch geometry fits best.
-        const rows = shp.value.map(item => {
+        const rows = (value || []).map(item => {
           const paths = wktToPaths(item.Geometry);
           const pts = paths.reduce((n, p) => n + p.length, 0);
           return { direction: item.Direction, paths, pts };
         }).filter(r => r.pts > 0);
         setShapes(rows);
-      } else setShapes([]);
-      if (near.status === "fulfilled" && Array.isArray(near.value)) applyNearStops(near.value);
-      else setNearStops([]);
-    } catch (e) { setErr(e.message); setDirs([]); }
-    setLoading(false);
-  }, [lang]);
+        setShapeStatus(rows.length ? "ready" : "empty");
+      }).catch(() => {
+        if (seq !== loadSeq.current) return;
+        setShapes([]);
+        setShapeStatus("failed");
+      });
+
+      refreshLive(name, true, seq);
+    } catch (e) {
+      if (seq !== loadSeq.current) return;
+      setErr(e.message); setDirs([]); setLoading(false); setShapeStatus("idle");
+    }
+  }, [lang, refreshLive]);
 
   useEffect(() => { if (initialRoute) load(initialRoute); }, [initialRoute, load]);
   useEffect(() => {
@@ -976,13 +988,13 @@ function RouteSearch({ favs, setFavs, initialRoute, onShowStops, lang }) {
         <div className="flex items-center justify-between px-2 pb-2">
           <div>
             <div className="text-[11px] font-semibold uppercase text-slate-500">{t.map}</div>
-            <div className="text-sm font-semibold text-slate-800">{routePaths ? t.routeLine : t.liveBoard}</div>
+            <div className="text-sm font-semibold text-slate-800">{routePaths ? t.routeLine : (shapeStatus === "loading" ? t.fetching : t.liveBoard)}</div>
           </div>
           <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-500">{visibleVehicles.length} {t.vehiclesMetric}</div>
         </div>
         <div className="min-h-[340px] flex-1">
           <MapPanel stops={stops.map(s => ({ ...s, name: pickName(s.zh, s.en, lang) }))} vehicles={visibleVehicles} routePaths={routePaths}
-            onStopClick={(s) => onShowStops && onShowStops(s.zh)} stopActionLabel={t.viewRoutes} userLocation={userLocation} />
+            showFallbackLine={false} onStopClick={(s) => onShowStops && onShowStops(s.zh)} stopActionLabel={t.viewRoutes} userLocation={userLocation} />
         </div>
       </Panel>
     </div>
